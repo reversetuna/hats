@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>57 Hats — Organizational Role Tool</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header Bar -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">🎩</span>
+                <h1>Who Wears The Hats?</h1>
+            </div>
+            <nav class="toolbar">
+                <button id="addCardBtn" class="tool-btn" title="Create Custom Hat">
+                    <span class="icon">🎩</span>
+                    <span class="label">Add Hat</span>
+                </button>
+                <button id="addTaskBtn" class="tool-btn" title="Add Task">
+                    <span class="icon">📝</span>
+                    <span class="label">Add Task</span>
+                </button>
+                <button id="addPersonBtn" class="tool-btn" title="Add Person (Swimlane)">
+                    <span class="icon">👤</span>
+                    <span class="label">Add Person</span>
+                </button>                
+                <div class="divider"></div>
+                <button id="allTasksBtn" class="tool-btn" title="View All Tasks">
+                    <span class="icon">📋</span>
+                    <span class="label">All Tasks</span>
+                </button>
+                <div class="divider"></div>
+                <button id="exportBtn" class="tool-btn" title="Export to JSON">
+                    <span class="icon">💾</span>
+                    <span class="label">Export</span>
+                </button>
+                <button id="importBtn" class="tool-btn" title="Import from JSON">
+                    <span class="icon">📂</span>
+                    <span class="label">Import</span>
+                </button>
+                <input type="file" id="importFile" accept=".json" hidden>
+                <div class="divider"></div>
+                <button id="clearBtn" class="tool-btn danger" title="Clear Table">
+                    <span class="icon">🗑️</span>
+                    <span class="label">Clear</span>
+                </button>
+            </nav>
+        </header>
+
+        <!-- Main Layout -->
+        <div class="workspace">
+            <!-- Left Sidebar: Hat Library -->
+            <aside class="sidebar left">
+                <div class="sidebar-header">
+                    <h2>Hat Library</h2>
+                    <span class="badge" id="hatCount">57</span>
+                </div>
+                <div class="search-box">
+                    <input type="text" id="hatSearch" placeholder="Search hats...">
+                </div>
+                <div id="hatLibrary" class="hat-list"></div>
+            </aside>
+
+            <!-- Center: Canvas with Swimlanes -->
+            <main class="canvas-area">
+                <div id="canvas-container"></div>
+                <div class="canvas-hint">
+                    <p>Drag hats into swimlanes • Drop tasks on hats (or between hats) • Click hat for details</p>
+                    <p>Keys: <b>/</b> Search • <b>N</b> Task • <b>P</b> Person • <b>H</b> Hat • <b>⌘Z</b> Undo • <b>Arrows</b> Pan</p>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="personModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <button class="modal-close">&times;</button>
+            <h2>Add Person</h2>
+            <div class="form-group">
+                <label for="personNameInput">Name</label>
+                <input type="text" id="personNameInput" placeholder="Enter name..." maxlength="50" autofocus>
+            </div>
+            <div class="form-group">
+                <label>Color</label>
+                <div class="color-picker">
+                    <button class="color-option" data-color="#e74c3c" style="background:#e74c3c"></button>
+                    <button class="color-option" data-color="#e67e22" style="background:#e67e22"></button>
+                    <button class="color-option" data-color="#f1c40f" style="background:#f1c40f"></button>
+                    <button class="color-option" data-color="#2ecc71" style="background:#2ecc71"></button>
+                    <button class="color-option" data-color="#3498db" style="background:#3498db"></button>
+                    <button class="color-option" data-color="#9b59b6" style="background:#9b59b6"></button>
+                    <button class="color-option selected" data-color="#1abc9c" style="background:#1abc9c"></button>
+                    <button class="color-option" data-color="#34495e" style="background:#34495e"></button>
+                </div>
+            </div>
+            <button id="createPersonBtn" class="btn primary">Add Person</button>
+        </div>
+    </div>
+
+    <div id="taskModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <button class="modal-close">&times;</button>
+            <h2>Create Task</h2>
+            <div class="form-group">
+                <label for="taskInput">Task Description</label>
+                <textarea id="taskInput" placeholder="What needs to be done..." maxlength="200" rows="3"></textarea>
+            </div>
+            <button id="createTaskBtn" class="btn primary">Create Task</button>
+        </div>
+    </div>
+
+    <div id="cardModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <button class="modal-close">&times;</button>
+            <h2>Create Custom Hat</h2>
+            <div class="form-group">
+                <label for="cardNameInput">Role Name</label>
+                <input type="text" id="cardNameInput" placeholder="The Architect..." maxlength="40">
+            </div>
+            <div class="form-group">
+                <label for="cardDescInput">Description</label>
+                <textarea id="cardDescInput" placeholder="Describe this role..." maxlength="150" rows="2"></textarea>
+            </div>
+            <button id="createCardBtn" class="btn primary">Create Hat</button>
+        </div>
+    </div>
+
+    <div id="hatDetailModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content wide">
+            <button class="modal-close">&times;</button>
+            <div class="hat-detail-header">
+                <span class="hat-icon">🎩</span>
+                <div>
+                    <h2 id="hatDetailTitle">Hat Name</h2>
+                    <p id="hatDetailDesc" class="hat-desc">Description</p>
+                    <p id="hatDetailPerson" class="hat-person"></p>
+                </div>
+            </div>
+            <div class="hat-detail-section">
+                <h3>Assigned Tasks <span id="taskCountBadge" class="badge">0</span></h3>
+                <div id="hatTasksList" class="hat-tasks-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="allTasksModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content extra-wide">
+            <button class="modal-close">&times;</button>
+            <div class="modal-header-row">
+                <h2>All Tasks <span id="allTasksCount" class="badge">0</span></h2>
+                <button id="addTaskFromViewBtn" class="btn primary small">+ Add Task</button>
+            </div>
+            <div class="add-task-inline" id="inlineTaskForm" style="display:none;">
+                <input type="text" id="inlineTaskInput" placeholder="Enter task description..." maxlength="200">
+                <button id="inlineTaskSubmit" class="btn primary small">Add</button>
+                <button id="inlineTaskCancel" class="btn secondary small">Cancel</button>
+            </div>
+            <div id="allTasksGrid" class="all-tasks-grid"></div>
+            <div id="noTasksMessage" class="no-tasks">No tasks in the organization yet</div>
+        </div>
+    </div>
+
+    <div id="personViewModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content extra-wide">
+            <button class="modal-close">&times;</button>
+            <div class="person-view-header">
+                <span class="person-icon">👤</span>
+                <div>
+                    <h2 id="personViewName">Person Name</h2>
+                    <p id="personViewStats" class="person-stats">0 hats, 0 tasks</p>
+                </div>
+            </div>
+            <div id="personViewContent" class="person-view-content"></div>
+        </div>
+    </div>
+
+    <div id="searchModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <button class="modal-close">&times;</button>
+            <h2>🔍 Search</h2>
+            <div class="search-input-wrapper">
+                <input type="text" id="globalSearchInput" placeholder="Search hats, tasks, people..." autofocus>
+            </div>
+            <div id="searchResults" class="search-results"></div>
+        </div>
+    </div>
+
+    <div id="confirmModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content small">
+            <h2>Clear Table?</h2>
+            <p>This will remove all cards, tasks, and people from the table.</p>
+            <div class="btn-group">
+                <button id="confirmClearBtn" class="btn danger">Clear Table</button>
+                <button id="cancelClearBtn" class="btn secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>
