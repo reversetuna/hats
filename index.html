@@ -37,6 +37,20 @@
                     <span class="label">All Tasks</span>
                 </button>
                 <div class="divider"></div>
+                <button id="shareWorkspaceBtn" class="tool-btn" title="Share Workspace">
+                    <span class="icon">🔗</span>
+                    <span class="label">Share Workspace</span>
+                </button>
+                <button id="copyLinkBtn" class="tool-btn" title="Copy Share Link" style="display: none;">
+                    <span class="icon">📋</span>
+                    <span class="label">Copy Link</span>
+                </button>
+                <button id="manageTokenBtn" class="tool-btn" title="Manage GitHub Token" style="display: none;">
+                    <span class="icon">🔑</span>
+                    <span class="label">Token</span>
+                </button>
+                <span id="workspaceStatus" style="display: none; margin-left: 8px; padding: 4px 12px; background: #2c3e50; color: white; border-radius: 4px; font-size: 12px; font-weight: 600;"></span>
+                <div class="divider"></div>
                 <button id="exportBtn" class="tool-btn" title="Export to JSON">
                     <span class="icon">💾</span>
                     <span class="label">Export</span>
@@ -208,6 +222,30 @@
             <div class="btn-group">
                 <button id="confirmClearBtn" class="btn danger">Clear Table</button>
                 <button id="cancelClearBtn" class="btn secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="githubTokenModal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <button class="modal-close">&times;</button>
+            <h2>GitHub Token Required</h2>
+            <p style="margin-bottom: 1rem; color: var(--cream-dark);">
+                To create and update shared workspaces, you need a GitHub Personal Access Token with <code>gist</code> scope.
+            </p>
+            <div class="form-group">
+                <label for="githubTokenInput">GitHub Personal Access Token</label>
+                <input type="password" id="githubTokenInput" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autofocus>
+                <small style="color: var(--wood-grain); margin-top: 0.5rem; display: block;">
+                    Your token is stored locally and only used to create/update gists. 
+                    <a href="#" id="tokenHelpLink" style="color: var(--brass-light);">Create a token →</a>
+                </small>
+            </div>
+            <div class="btn-group">
+                <button id="saveTokenBtn" class="btn primary">Save Token</button>
+                <button id="removeTokenBtn" class="btn danger" style="display: none;">Remove Token</button>
+                <button id="cancelTokenBtn" class="btn secondary">Cancel</button>
             </div>
         </div>
     </div>

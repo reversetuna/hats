@@ -166,9 +166,48 @@ function init() {
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('resize', onWindowResize);
     window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('hashchange', handleHashChange);
     
-    loadState();
+    loadState().then(() => {
+        // State loaded, ready to go
+    });
     animate();
+}
+
+// Handle URL hash changes (workspace switching)
+async function handleHashChange() {
+    const workspaceId = getWorkspaceIdFromURL();
+    
+    if (workspaceId && workspaceId !== currentWorkspaceId) {
+        // Switching to a different workspace
+        stopPolling();
+        await loadWorkspaceFromGist(workspaceId);
+        startPolling();
+    } else if (!workspaceId && isSharedWorkspace) {
+        // Switching back to private
+        stopPolling();
+        updateWorkspaceURL(null);
+        // Reload from localStorage
+        const saved = localStorage.getItem('hatsAppState');
+        if (saved) {
+            const data = JSON.parse(saved);
+            const savedHats = data.hats || [];
+            state.hats = DEFAULT_HATS.map(defaultHat => {
+                const savedHat = savedHats.find(h => h.id === defaultHat.id);
+                return savedHat ? { ...defaultHat, ...savedHat, emoji: defaultHat.emoji } : defaultHat;
+            });
+            savedHats.forEach(savedHat => {
+                if (!DEFAULT_HATS.find(h => h.id === savedHat.id)) {
+                    state.hats.push({ ...savedHat, emoji: savedHat.emoji || '🎩' });
+                }
+            });
+            state.people = data.people || [];
+            state.tasks = data.tasks || [];
+            state.tableCards = data.tableCards || [];
+            state.nextId = data.nextId || 1000;
+            rebuildScene();
+        }
+    }
 }
 
 // ============================================================================
@@ -1554,6 +1593,442 @@ function openAllTasksModal() {
 }
 
 // ============================================================================
+// WORKSPACE MANAGEMENT (GitHub Gists)
+// ============================================================================
+let currentWorkspaceId = null;
+let isSharedWorkspace = false;
+let pollingInterval = null;
+let lastRemoteContent = null; // What we last confirmed the remote has
+let lastLocalSaveTime = 0;    // When we last saved locally
+const POLL_INTERVAL = 3000;   // 3 seconds
+const SAVE_GRACE_PERIOD = 4000; // Don't pull remote changes for 4s after local save
+
+// GitHub token management
+// WARNING: Hard-coded token will be visible in source code and deployed site
+// Anyone with access can see and use this token. Consider using environment variables
+// or prompting users for their own tokens instead.
+const HARDCODED_GITHUB_TOKEN = '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';
+
+function getGitHubToken() {
+    // Use hard-coded token, fallback to localStorage if needed
+    return HARDCODED_GITHUB_TOKEN || localStorage.getItem('githubToken') || null;
+}
+
+function setGitHubToken(token) {
+    // Still allow localStorage override if needed
+    if (token && token !== HARDCODED_GITHUB_TOKEN) {
+        localStorage.setItem('githubToken', token);
+    } else {
+        localStorage.removeItem('githubToken');
+    }
+}
+
+function hasGitHubToken() {
+    return !!getGitHubToken();
+}
+
+// Get workspace ID from URL hash
+function getWorkspaceIdFromURL() {
+    const hash = window.location.hash;
+    const match = hash.match(/workspace\/([a-f0-9]+)/);
+    return match ? match[1] : null;
+}
+
+// Update URL with workspace ID
+function updateWorkspaceURL(gistId) {
+    if (gistId) {
+        window.location.hash = `workspace/${gistId}`;
+        currentWorkspaceId = gistId;
+        isSharedWorkspace = true;
+    } else {
+        window.location.hash = '';
+        currentWorkspaceId = null;
+        isSharedWorkspace = false;
+    }
+    updateWorkspaceUI();
+}
+
+// Create a new shared workspace (GitHub Gist)
+async function createSharedWorkspace() {
+    const stateSnapshot = JSON.stringify({
+        hats: state.hats,
+        people: state.people,
+        tasks: state.tasks,
+        tableCards: state.tableCards,
+        nextId: state.nextId
+    });
+    
+    const token = getGitHubToken();
+    
+    try {
+        const response = await fetch('https://api.github.com/gists', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `token ${token}`
+            },
+            body: JSON.stringify({
+                description: '57 Hats Workspace - Shared organizational roles',
+                public: false, // Secret gist - not visible on profile, only accessible via direct link
+                files: {
+                    'workspace.json': {
+                        content: stateSnapshot
+                    }
+                }
+            })
+        });
+        
+        if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error('GitHub token is invalid. Please check the token in the code.');
+            }
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const gist = await response.json();
+        const gistId = gist.id;
+        
+        updateWorkspaceURL(gistId);
+        lastRemoteContent = gist.files['workspace.json']?.content;
+        startPolling();
+        
+        // Copy link to clipboard
+        const shareUrl = `${window.location.origin}${window.location.pathname}#workspace/${gistId}`;
+        await navigator.clipboard.writeText(shareUrl);
+        
+        showNotification('Shared workspace created! Link copied to clipboard.');
+        return gistId;
+    } catch (error) {
+        console.error('Failed to create shared workspace:', error);
+        alert('Failed to create shared workspace: ' + error.message);
+        return null;
+    }
+}
+
+// Load workspace from GitHub Gist
+async function loadWorkspaceFromGist(gistId) {
+    try {
+        const token = getGitHubToken();
+        const headers = token ? { 'Authorization': `token ${token}` } : {};
+        const response = await fetch(`https://api.github.com/gists/${gistId}?t=${Date.now()}`, { headers });
+        
+        if (!response.ok) {
+            if (response.status === 404) {
+                throw new Error('Workspace not found');
+            }
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const gist = await response.json();
+        const content = gist.files['workspace.json']?.content;
+        
+        if (!content) {
+            throw new Error('Invalid workspace format');
+        }
+        
+        const data = JSON.parse(content);
+        
+        // Merge saved hats with DEFAULT_HATS to ensure emojis are present
+        const savedHats = data.hats || [];
+        state.hats = DEFAULT_HATS.map(defaultHat => {
+            const savedHat = savedHats.find(h => h.id === defaultHat.id);
+            return savedHat ? { ...defaultHat, ...savedHat, emoji: defaultHat.emoji } : defaultHat;
+        });
+        // Add any custom hats that aren't in defaults
+        savedHats.forEach(savedHat => {
+            if (!DEFAULT_HATS.find(h => h.id === savedHat.id)) {
+                state.hats.push({ ...savedHat, emoji: savedHat.emoji || '🎩' });
+            }
+        });
+        
+        state.people = data.people || [];
+        state.tasks = data.tasks || [];
+        state.tableCards = data.tableCards || [];
+        state.nextId = data.nextId || 1000;
+        
+        rebuildScene();
+        lastRemoteContent = content;
+        return true;
+    } catch (error) {
+        alert('Failed to load shared workspace: ' + error.message);
+        return false;
+    }
+}
+
+// Update workspace (save to Gist)
+async function updateSharedWorkspace() {
+    if (!currentWorkspaceId) return false;
+    
+    const token = getGitHubToken();
+    if (!token) return false;
+    
+    const stateSnapshot = JSON.stringify({
+        hats: state.hats,
+        people: state.people,
+        tasks: state.tasks,
+        tableCards: state.tableCards,
+        nextId: state.nextId
+    });
+    
+    try {
+        const response = await fetch(`https://api.github.com/gists/${currentWorkspaceId}`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `token ${token}`
+            },
+            body: JSON.stringify({
+                files: {
+                    'workspace.json': {
+                        content: stateSnapshot
+                    }
+                }
+            })
+        });
+        
+        if (!response.ok) return false;
+        
+        const gist = await response.json();
+        lastRemoteContent = gist.files['workspace.json']?.content;
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+// Poll for updates in shared workspace
+function startPolling() {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+    }
+    
+    if (!isSharedWorkspace || !currentWorkspaceId) {
+        return;
+    }
+    
+    pollingInterval = setInterval(async () => {
+        const timeSinceLastSave = Date.now() - lastLocalSaveTime;
+        
+        // Skip polling if we recently saved locally
+        if (timeSinceLastSave < SAVE_GRACE_PERIOD) {
+            return;
+        }
+        
+        try {
+            const token = getGitHubToken();
+            const headers = token ? { 'Authorization': `token ${token}` } : {};
+            const response = await fetch(`https://api.github.com/gists/${currentWorkspaceId}?t=${Date.now()}`, { headers });
+            if (!response.ok) return;
+            
+            const gist = await response.json();
+            const remoteContent = gist.files['workspace.json']?.content;
+            
+            if (!remoteContent) return;
+            
+            // If remote is different from what we last knew it had
+            if (remoteContent !== lastRemoteContent) {
+                const data = JSON.parse(remoteContent);
+                const savedHats = data.hats || [];
+                state.hats = DEFAULT_HATS.map(defaultHat => {
+                    const savedHat = savedHats.find(h => h.id === defaultHat.id);
+                    return savedHat ? { ...defaultHat, ...savedHat, emoji: defaultHat.emoji } : defaultHat;
+                });
+                savedHats.forEach(savedHat => {
+                    if (!DEFAULT_HATS.find(h => h.id === savedHat.id)) {
+                        state.hats.push({ ...savedHat, emoji: savedHat.emoji || '🎩' });
+                    }
+                });
+                
+                state.people = data.people || [];
+                state.tasks = data.tasks || [];
+                state.tableCards = data.tableCards || [];
+                state.nextId = data.nextId || 1000;
+                
+                rebuildScene();
+                lastRemoteContent = remoteContent;
+                showNotification('Workspace updated', 2000);
+            }
+        } catch (error) {
+            // Silently ignore polling errors
+        }
+    }, POLL_INTERVAL);
+}
+
+function stopPolling() {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+}
+
+// Rebuild the entire scene (used after loading state)
+function rebuildScene() {
+    // Clear existing meshes
+    cardMeshes.forEach(m => scene.remove(m));
+    taskMeshes.forEach(m => scene.remove(m));
+    cardMeshes.clear();
+    taskMeshes.clear();
+    
+    // Rebuild swimlanes
+    rebuildSwimlanes();
+    
+    // Create card meshes
+    state.tableCards.forEach(cardData => {
+        const hat = state.hats.find(h => h.id === cardData.hatId);
+        if (hat) {
+            const mesh = createCardMesh(hat, cardData.id);
+            mesh.userData.personId = cardData.personId;
+            scene.add(mesh);
+            cardMeshes.set(cardData.id, mesh);
+        }
+    });
+    
+    // Create task meshes
+    state.tasks.forEach(task => {
+        const isAttached = task.hatInstanceId !== null;
+        const mesh = createTaskMesh(task, isAttached);
+        if (!isAttached) {
+            mesh.position.set(task.x || (Math.random() - 0.5) * 20, task.y || (Math.random() - 0.5) * 15, 0.1);
+        }
+        scene.add(mesh);
+        taskMeshes.set(task.id, mesh);
+    });
+    
+    repositionAllCards();
+    updateHatLibraryUI();
+}
+
+// Update UI to show workspace status
+function updateWorkspaceUI() {
+    const shareBtn = document.getElementById('shareWorkspaceBtn');
+    const copyLinkBtn = document.getElementById('copyLinkBtn');
+    const manageTokenBtn = document.getElementById('manageTokenBtn');
+    const workspaceStatus = document.getElementById('workspaceStatus');
+    
+    // Hide token management button since we're using hard-coded token
+    if (manageTokenBtn) {
+        manageTokenBtn.style.display = 'none';
+    }
+    
+    if (isSharedWorkspace) {
+        if (shareBtn) shareBtn.textContent = 'Stop Sharing';
+        if (copyLinkBtn) copyLinkBtn.style.display = 'inline-flex';
+        if (workspaceStatus) {
+            workspaceStatus.textContent = '🔗 Shared';
+            workspaceStatus.style.display = 'inline-block';
+        }
+    } else {
+        if (shareBtn) shareBtn.textContent = 'Share Workspace';
+        if (copyLinkBtn) copyLinkBtn.style.display = 'none';
+        if (workspaceStatus) {
+            workspaceStatus.style.display = 'none';
+        }
+    }
+}
+
+// Prompt for GitHub token
+function promptForGitHubToken() {
+    return new Promise((resolve) => {
+        // Open token modal
+        openModal('githubTokenModal');
+        
+        const input = document.getElementById('githubTokenInput');
+        const saveBtn = document.getElementById('saveTokenBtn');
+        const cancelBtn = document.getElementById('cancelTokenBtn');
+        const removeBtn = document.getElementById('removeTokenBtn');
+        const modalTitle = document.querySelector('#githubTokenModal h2');
+        
+        // Update modal for prompt mode
+        if (modalTitle) modalTitle.textContent = 'GitHub Token Required';
+        if (removeBtn) removeBtn.style.display = 'none';
+        if (saveBtn) saveBtn.textContent = 'Save Token';
+        
+        // Clear input
+        if (input) {
+            input.value = '';
+            input.type = 'text';
+        }
+        
+        // Create one-time handlers
+        const saveHandler = () => {
+            const token = input?.value.trim();
+            if (token) {
+                closeModal(document.getElementById('githubTokenModal'));
+                resolve(token);
+            }
+        };
+        
+        const cancelHandler = () => {
+            closeModal(document.getElementById('githubTokenModal'));
+            resolve(null);
+        };
+        
+        // Temporarily override button handlers
+        const originalSaveHandler = saveBtn?.onclick;
+        const originalCancelHandler = cancelBtn?.onclick;
+        
+        if (saveBtn) {
+            saveBtn.onclick = saveHandler;
+        }
+        if (cancelBtn) {
+            cancelBtn.onclick = cancelHandler;
+        }
+        
+        // Enter key on input
+        if (input) {
+            const keyHandler = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveHandler();
+                    input.removeEventListener('keydown', keyHandler);
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelHandler();
+                    input.removeEventListener('keydown', keyHandler);
+                }
+            };
+            input.addEventListener('keydown', keyHandler);
+        }
+        
+        // Focus input
+        setTimeout(() => input?.focus(), 100);
+    });
+}
+
+// Show notification
+function showNotification(message, duration = 3000) {
+    // Create or get notification element
+    let notification = document.getElementById('notification');
+    if (!notification) {
+        notification = document.createElement('div');
+        notification.id = 'notification';
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #2c3e50;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 10000;
+            font-family: 'Crimson Pro', serif;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        `;
+        document.body.appendChild(notification);
+    }
+    
+    notification.textContent = message;
+    notification.style.opacity = '1';
+    
+    setTimeout(() => {
+        notification.style.opacity = '0';
+    }, duration);
+}
+
+// ============================================================================
 // STATE PERSISTENCE
 // ============================================================================
 function saveState() {
@@ -1574,7 +2049,14 @@ function saveState() {
         }
     }
     
+    // Save to localStorage (always, as backup)
     localStorage.setItem('hatsAppState', stateSnapshot);
+    
+    // If in shared workspace, also save to Gist
+    if (isSharedWorkspace && currentWorkspaceId) {
+        lastLocalSaveTime = Date.now();
+        updateSharedWorkspace();
+    }
 }
 
 function undo() {
@@ -1630,13 +2112,38 @@ function undo() {
         // Save to localStorage without adding to undo stack
         localStorage.setItem('hatsAppState', previousState);
         
+        // If in shared workspace, also update Gist
+        if (isSharedWorkspace && currentWorkspaceId) {
+            lastLocalSaveTime = Date.now();
+            updateSharedWorkspace();
+        }
+        
         console.log('Undo successful');
     } catch (e) {
         console.error('Undo failed:', e);
     }
 }
 
-function loadState() {
+async function loadState() {
+    // Check if we have a workspace ID in the URL
+    const workspaceId = getWorkspaceIdFromURL();
+    
+    if (workspaceId) {
+        // Load from shared workspace
+        currentWorkspaceId = workspaceId;
+        isSharedWorkspace = true;
+        const loaded = await loadWorkspaceFromGist(workspaceId);
+        if (loaded) {
+            startPolling();
+            updateWorkspaceUI();
+            return;
+        } else {
+            // Failed to load from Gist, fall back to localStorage
+            updateWorkspaceURL(null);
+        }
+    }
+    
+    // Load from localStorage (private workspace)
     const saved = localStorage.getItem('hatsAppState');
     if (saved) {
         try {
@@ -1671,7 +2178,7 @@ function loadState() {
         if (hat) {
             const mesh = createCardMesh(hat, cardData.id);
             mesh.userData.personId = cardData.personId;
-                        scene.add(mesh);
+            scene.add(mesh);
             cardMeshes.set(cardData.id, mesh);
         }
     });
@@ -1689,11 +2196,22 @@ function loadState() {
     
     repositionAllCards();
     updateHatLibraryUI();
+    updateWorkspaceUI();
 }
 
 function exportData() {
     saveState();
-    const blob = new Blob([localStorage.getItem('hatsAppState')], { type: 'application/json' });
+    const stateData = isSharedWorkspace 
+        ? JSON.stringify({
+            hats: state.hats,
+            people: state.people,
+            tasks: state.tasks,
+            tableCards: state.tableCards,
+            nextId: state.nextId
+        })
+        : localStorage.getItem('hatsAppState');
+    
+    const blob = new Blob([stateData], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = `57-hats-${new Date().toISOString().split('T')[0]}.json`;
@@ -1704,6 +2222,11 @@ function importData(file) {
     const reader = new FileReader();
     reader.onload = (e) => {
         try {
+            // Stop sharing if currently shared
+            if (isSharedWorkspace) {
+                stopPolling();
+                updateWorkspaceURL(null);
+            }
             clearTable();
             localStorage.setItem('hatsAppState', e.target.result);
             location.reload();
@@ -1730,6 +2253,11 @@ function clearTable() {
     rebuildSwimlanes();
     updateHatLibraryUI();
     saveState();
+    
+    // Update last synced state if in shared workspace
+    if (isSharedWorkspace) {
+        lastLocalSaveTime = Date.now();
+    }
 }
 
 // ============================================================================
@@ -2168,6 +2696,103 @@ function setupModals() {
     });
     
     document.getElementById('hatSearch')?.addEventListener('input', updateHatLibraryUI);
+    
+    // Workspace sharing handlers
+    document.getElementById('shareWorkspaceBtn')?.addEventListener('click', async () => {
+        if (isSharedWorkspace) {
+            // Stop sharing - switch back to private
+            stopPolling();
+            updateWorkspaceURL(null);
+            showNotification('Switched to private workspace');
+        } else {
+            // Start sharing - create Gist
+            await createSharedWorkspace();
+        }
+    });
+    
+    document.getElementById('copyLinkBtn')?.addEventListener('click', async () => {
+        if (currentWorkspaceId) {
+            const shareUrl = `${window.location.origin}${window.location.pathname}#workspace/${currentWorkspaceId}`;
+            try {
+                await navigator.clipboard.writeText(shareUrl);
+                showNotification('Link copied to clipboard!');
+            } catch (error) {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = shareUrl;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showNotification('Link copied to clipboard!');
+            }
+        }
+    });
+    
+    // Token management
+    document.getElementById('manageTokenBtn')?.addEventListener('click', async () => {
+        const currentToken = getGitHubToken();
+        const input = document.getElementById('githubTokenInput');
+        const removeBtn = document.getElementById('removeTokenBtn');
+        
+        if (input) {
+            input.value = currentToken || '';
+            input.type = currentToken ? 'password' : 'text';
+        }
+        
+        if (removeBtn) {
+            removeBtn.style.display = currentToken ? 'inline-block' : 'none';
+        }
+        
+        openModal('githubTokenModal');
+        
+        // Update save button text
+        const saveBtn = document.getElementById('saveTokenBtn');
+        if (saveBtn) {
+            saveBtn.textContent = currentToken ? 'Update Token' : 'Save Token';
+        }
+    });
+    
+    // Setup token modal handlers
+    document.getElementById('saveTokenBtn')?.addEventListener('click', () => {
+        const input = document.getElementById('githubTokenInput');
+        const token = input?.value.trim();
+        if (token) {
+            setGitHubToken(token);
+            closeModal(document.getElementById('githubTokenModal'));
+            updateWorkspaceUI();
+            showNotification('GitHub token saved!');
+        }
+    });
+    
+    document.getElementById('removeTokenBtn')?.addEventListener('click', () => {
+        if (confirm('Remove GitHub token? You won\'t be able to create or update shared workspaces.')) {
+            setGitHubToken(null);
+            closeModal(document.getElementById('githubTokenModal'));
+            updateWorkspaceUI();
+            showNotification('GitHub token removed');
+        }
+    });
+    
+    document.getElementById('cancelTokenBtn')?.addEventListener('click', () => {
+        closeModal(document.getElementById('githubTokenModal'));
+    });
+    
+    // Token input enter key
+    document.getElementById('githubTokenInput')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('saveTokenBtn')?.click();
+        }
+    });
+    
+    // Token help link
+    document.getElementById('tokenHelpLink')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.open('https://github.com/settings/tokens/new?description=57%20Hats%20Workspace&scopes=gist', '_blank');
+    });
 }
 
 // ============================================================================
