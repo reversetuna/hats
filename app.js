@@ -1607,7 +1607,7 @@ const SAVE_GRACE_PERIOD = 4000; // Don't pull remote changes for 4s after local 
 // WARNING: Hard-coded token will be visible in source code and deployed site
 // Anyone with access can see and use this token. Consider using environment variables
 // or prompting users for their own tokens instead.
-const HARDCODED_GITHUB_TOKEN = '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';
+const HARDCODED_GITHUB_TOKEN = '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';
 
 function getGitHubToken() {
     // Use hard-coded token, fallback to localStorage if needed
