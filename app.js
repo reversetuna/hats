@@ -14,7 +14,7 @@ const DEFAULT_HATS = [
     { id: 8, name: "CTO", emoji: "🖥️", description: "Leads technology strategy and innovation" },
     { id: 9, name: "Project Manager", emoji: "📋", description: "Delivers projects on time and budget" },
     { id: 10, name: "Community Manager", emoji: "🌐", description: "Builds and nurtures community engagement" },
-    { id: 11, name: "CEO", emoji: "👑", description: "Sets vision and leads the organization" },
+    { id: 11, name: "CEO", emoji: "🕴️", description: "Sets vision and leads the organization" },
     { id: 12, name: "Integrator", emoji: "🔗", description: "Connects systems and teams seamlessly" },
     { id: 13, name: "Customer Service Representative", emoji: "🎧", description: "Resolves issues and delights customers" },
     { id: 14, name: "Social Media Manager", emoji: "📱", description: "Grows brand presence on social platforms" },
